@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/utils"
 	"github.com/google/uuid"
 )
 
@@ -68,32 +69,54 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	file, errFile := os.CreateTemp("/tmp", "tubely-*.mp4")
+	tempFile, errFile := os.CreateTemp("/tmp", "tubely-*.mp4")
 	if errFile != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create temp file", errFile)
 		return
 	}
-	defer os.Remove(file.Name())
-	defer file.Close()
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
 
-	_, errCopy := io.Copy(file, uploadedFile)
+	_, errCopy := io.Copy(tempFile, uploadedFile)
 	if errCopy != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to copy uploaded file to temp file", errCopy)
 		return
 	}
+
+	fastStartFile, fastErrr := utils.ProcessVideoForFastStart(tempFile.Name())
+	if fastErrr != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video for fast start", fastErrr)
+		return
+	}
+
+	fastStartFileBytes, errOpen := os.Open(fastStartFile)
+	if errOpen != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed video file", errOpen)
+		return
+	}
+	defer os.Remove(fastStartFile)
+	defer fastStartFileBytes.Close()
 
 	_, errOffset := uploadedFile.Seek(0, io.SeekStart)
 	if errOffset != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to set offset for file", errOffset)
 		return
 	}
+
+	ratio, errStream := utils.GetVideoAspectRatio(fastStartFile)
+	if errStream != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to get video aspect ratio", errStream)
+		return
+	}
+
 	keyFileName, _ := CreateRandomFileName()
-	videoFullURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s.%s", cfg.s3Bucket, cfg.s3Region, keyFileName, fileExtension)
-	keyURL := fmt.Sprintf("%s.%s", keyFileName, fileExtension)
+	videoFullURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s/%s.%s", cfg.s3Bucket, cfg.s3Region, ratio, keyFileName, fileExtension)
+	keyURL := fmt.Sprintf("%s/%s.%s", ratio, keyFileName, fileExtension)
+
 	objectInput := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &keyURL,
-		Body:        uploadedFile,
+		Body:        fastStartFileBytes,
 		ContentType: &mediaType,
 	}
 	_, errUpload := cfg.s3AppClient.PutObject(r.Context(), &objectInput)
