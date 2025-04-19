@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -69,14 +67,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "Unable to read file", nil)
 		return
 	}
-	randomBytes := make([]byte, 32)
-	_, errBytes := rand.Read(randomBytes)
-	if errBytes != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to create bytes for image name", errBytes)
-		return
-	}
-
-	randomFileName := base64.RawURLEncoding.EncodeToString(randomBytes)
+	randomFileName, _ := CreateRandomFileName()
 	filePath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s.%s", randomFileName, fileExtension))
 	log.Println("filePath", filePath)
 
