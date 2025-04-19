@@ -1,0 +1,13 @@
+###
+# @name login
+POST http://localhost:8091/api/login
+
+{
+  "email": "admin@tubely.com",
+  "password": "password"
+}
+
+###
+GET http://localhost:8091/api/videos
+Authorization: Bearer {{login.response.body.token}}
+

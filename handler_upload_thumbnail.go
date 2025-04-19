@@ -1,9 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
@@ -45,11 +51,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	mediaType := header.Header.Get("Content-Type")
 
-	fileData, errFile := io.ReadAll(file)
-
-	if errFile != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to read file", errFile)
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
+		return
 	}
+
+	fileExtension := strings.Split(mediaType, "/")[1]
 
 	videoMetadata, videoErr := cfg.db.GetVideo(videoID)
 
@@ -59,17 +66,35 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	if userID != videoMetadata.UserID {
-		respondWithError(w, http.StatusUnauthorized, "Unable to read file", errFile)
+		respondWithError(w, http.StatusUnauthorized, "Unable to read file", nil)
+		return
+	}
+	randomBytes := make([]byte, 32)
+	_, errBytes := rand.Read(randomBytes)
+	if errBytes != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create bytes for image name", errBytes)
 		return
 	}
 
-	videoThumbnail := thumbnail{
-		data:      fileData,
-		mediaType: mediaType,
-	}
-	videoThumbnails[videoID] = videoThumbnail
+	randomFileName := base64.RawURLEncoding.EncodeToString(randomBytes)
+	filePath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s.%s", randomFileName, fileExtension))
+	log.Println("filePath", filePath)
 
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID.String())
+	fileCreated, createError := os.Create(filePath)
+
+	if createError != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file in disk", createError)
+		return
+	}
+	_, errorCopy := io.Copy(fileCreated, file)
+
+	if errorCopy != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to copy file", errorCopy)
+		return
+	}
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s.%s", cfg.port, randomFileName, fileExtension)
+
 	updateParams := database.Video{
 		ID:           videoMetadata.ID,
 		CreatedAt:    videoMetadata.CreatedAt,
