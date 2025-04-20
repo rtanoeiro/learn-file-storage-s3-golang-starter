@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -45,12 +46,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	const maxMemory = 10 << 20
 	r.ParseMultipartForm(maxMemory)
 
+	// Get details of video in DB so we can update it later
 	videoMetadata, dbError := cfg.db.GetVideo(videoID)
 	if dbError != nil {
 		respondWithError(w, http.StatusNotFound, "Video not found", dbError)
 		return
 	}
 
+	//Get uploaded file from http form, we'll process this file and upload it to S3
 	uploadedFile, header, errForm := r.FormFile("video")
 	if errForm != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to get form data from HTTP request", errForm)
@@ -69,6 +72,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Create tempo file so we can store the uploaded file
 	tempFile, errFile := os.CreateTemp("/tmp", "tubely-*.mp4")
 	if errFile != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create temp file", errFile)
@@ -110,7 +114,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	keyFileName, _ := CreateRandomFileName()
-	videoFullURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s/%s.%s", cfg.s3Bucket, cfg.s3Region, ratio, keyFileName, fileExtension)
+	videoDBURL := fmt.Sprintf("%s,%s/%s.%s", cfg.s3Bucket, ratio, keyFileName, fileExtension)
 	keyURL := fmt.Sprintf("%s/%s.%s", ratio, keyFileName, fileExtension)
 
 	objectInput := s3.PutObjectInput{
@@ -120,7 +124,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		ContentType: &mediaType,
 	}
 	_, errUpload := cfg.s3AppClient.PutObject(r.Context(), &objectInput)
-	log.Println("Uploading video to S3", videoFullURL)
+	log.Println("Uploading video to S3", videoDBURL)
 	if errUpload != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to upload file to S3", errUpload)
 	}
@@ -132,13 +136,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		},
 		ThumbnailURL: videoMetadata.ThumbnailURL,
 		ID:           videoID,
-		VideoURL:     &videoFullURL,
+		VideoURL:     &videoDBURL,
 	}
+	newVideo, _ := cfg.dbVideoToSignedVideo(updateVideoParams)
 	updateError := cfg.db.UpdateVideo(updateVideoParams)
 	if updateError != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to update video in database", updateError)
 	}
-
+	respondWithJSON(w, http.StatusOK, newVideo)
 }
 
 func CreateRandomFileName() (string, error) {
@@ -149,4 +154,40 @@ func CreateRandomFileName() (string, error) {
 	}
 	randomFileName := base64.RawURLEncoding.EncodeToString(randomBytes)
 	return randomFileName, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+
+	if video.VideoURL == nil || *video.VideoURL == "" {
+		return video, nil
+	}
+	parts := strings.Split(*video.VideoURL, ",")
+	log.Println("Parts from Video URL", parts)
+	if len(parts) < 2 {
+		return video, nil
+	}
+
+	bucket := parts[0]
+	key := parts[1]
+
+	newUrl, errURL := utils.GeneratePresignedURL(cfg.s3AppClient, bucket, key, time.Minute)
+	log.Println("Old URL from S3", *video.VideoURL)
+	log.Println("New URL from S3", newUrl)
+	if errURL != nil {
+		return video, errURL
+	}
+	videoReturn := database.Video{
+		ID:           video.ID,
+		CreatedAt:    video.CreatedAt,
+		UpdatedAt:    video.UpdatedAt,
+		ThumbnailURL: video.ThumbnailURL,
+		VideoURL:     &newUrl,
+		CreateVideoParams: database.CreateVideoParams{
+			Title:       video.Title,
+			Description: video.Description,
+			UserID:      video.UserID,
+		},
+	}
+	return videoReturn, nil
+
 }
