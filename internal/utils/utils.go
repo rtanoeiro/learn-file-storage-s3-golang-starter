@@ -1,14 +1,10 @@
 package utils
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"os/exec"
 	"strings"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type Stream struct {
@@ -139,19 +135,4 @@ func ProcessVideoForFastStart(filePath string) (string, error) {
 		return "", err
 	}
 	return string(newFileName), nil
-}
-
-func GeneratePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
-
-	presignClient := s3.NewPresignClient(s3Client)
-
-	getObject := s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-	}
-	response, errResponse := presignClient.PresignGetObject(context.Background(), &getObject)
-	if errResponse != nil {
-		return "", errResponse
-	}
-	return response.URL, nil
 }
